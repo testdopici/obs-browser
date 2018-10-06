@@ -270,6 +270,10 @@ void BrowserClient::OnLoadEnd(
 		script += "document.getElementsByTagName('head')[0].appendChild(link);";
 
 		frame->ExecuteJavaScript(script, href, 0);
+
+		std::string javascript;
+		javascript = bs->javascript;
+		frame->ExecuteJavaScript(javascript, frame->GetURL(), 0);
 	}
 }
 

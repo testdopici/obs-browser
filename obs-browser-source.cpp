@@ -331,6 +331,7 @@ void BrowserSource::Update(obs_data_t *settings)
 		bool n_restart;
 		std::string n_url;
 		std::string n_css;
+		std::string n_javascript;
 
 		n_is_local  = obs_data_get_bool(settings, "is_local_file");
 		n_width     = (int)obs_data_get_int(settings, "width");
@@ -339,6 +340,7 @@ void BrowserSource::Update(obs_data_t *settings)
 		n_shutdown  = obs_data_get_bool(settings, "shutdown");
 		n_restart   = obs_data_get_bool(settings, "restart_when_active");
 		n_css       = obs_data_get_string(settings, "css");
+		n_javascript = obs_data_get_string(settings, "javascript");
 		n_url       = obs_data_get_string(settings,
 				n_is_local ? "local_file" : "url");
 
@@ -352,7 +354,8 @@ void BrowserSource::Update(obs_data_t *settings)
 		    n_shutdown == shutdown_on_invisible &&
 		    n_restart == restart &&
 		    n_css == css &&
-		    n_url == url) {
+		    n_url == url &&
+		    n_javascript == javascript) {
 			return;
 		}
 
@@ -364,6 +367,7 @@ void BrowserSource::Update(obs_data_t *settings)
 		restart               = n_restart;
 		css                   = n_css;
 		url                   = n_url;
+		javascript            = n_javascript;
 	}
 
 	DestroyBrowser(true);
