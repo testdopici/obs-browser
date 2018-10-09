@@ -42,7 +42,9 @@ struct BrowserSource {
 
 	std::string           url;
 	std::string           css;
+    bool                  css_active               = false;
 	std::string           javascript;
+    bool                  javascript_active        = false;
 	gs_texture_t          *texture                 = nullptr;
 	int                   width                    = 0;
 	int                   height                   = 0;
