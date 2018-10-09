@@ -92,10 +92,10 @@ static void browser_source_get_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "fps", 30);
 	obs_data_set_default_bool(settings, "shutdown", false);
 	obs_data_set_default_bool(settings, "restart_when_active", false);
-    obs_data_set_default_string(settings, "css", default_css);
-    obs_data_set_default_string(settings, "javascript", "");
-    obs_data_set_default_bool(settings, "javascript_active", false);
-    obs_data_set_default_bool(settings, "css_active", false);
+	obs_data_set_default_string(settings, "css", default_css);
+	obs_data_set_default_string(settings, "javascript", "");
+	obs_data_set_default_bool(settings, "javascript_active", false);
+	//obs_data_set_default_bool(settings, "css_active", false);
 }
 
 static bool is_local_file_modified(obs_properties_t *props,
@@ -145,13 +145,13 @@ static obs_properties_t *browser_source_get_properties(void *data)
 			obs_module_text("FPS"), 1, 60, 1);
 	obs_properties_add_text(props, "css",
 			obs_module_text("CSS"), OBS_TEXT_MULTILINE);
-    obs_properties_add_bool(props, "css_active",
-                            obs_module_text("CSSActive"));
+	//obs_properties_add_bool(props, "css_active",
+        //                    obs_module_text("CSSActive"));
 	obs_properties_add_text(props, "javascript",
 			obs_module_text("Javascript"), OBS_TEXT_MULTILINE);
-    obs_properties_add_bool(props, "javascript_active",
-                            obs_module_text("JavascriptActive"));
-    obs_properties_add_bool(props, "shutdown",
+	obs_properties_add_bool(props, "javascript_active",
+			obs_module_text("JavascriptActive"));
+	obs_properties_add_bool(props, "shutdown",
 			obs_module_text("ShutdownSourceNotVisible"));
 	obs_properties_add_bool(props, "restart_when_active",
 			obs_module_text("RefreshBrowserActive"));
