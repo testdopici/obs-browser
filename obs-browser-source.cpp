@@ -333,14 +333,12 @@ void BrowserSource::Update(obs_data_t *settings)
 		std::string n_css;
 		std::string n_javascript;
 		bool n_javascript_active;
-		//bool n_css_active;
 
 		n_is_local  = obs_data_get_bool(settings, "is_local_file");
 		n_width     = (int)obs_data_get_int(settings, "width");
 		n_height    = (int)obs_data_get_int(settings, "height");
 		n_fps       = (int)obs_data_get_int(settings, "fps");
 		n_shutdown  = obs_data_get_bool(settings, "shutdown");
-		//n_css_active  = obs_data_get_bool(settings, "css_active");
 		n_javascript_active  = obs_data_get_bool(settings, "javascript_active");
 		n_restart   = obs_data_get_bool(settings, "restart_when_active");
 		n_css       = obs_data_get_string(settings, "css");
@@ -360,9 +358,7 @@ void BrowserSource::Update(obs_data_t *settings)
 		    n_css == css &&
 		    n_url == url &&
 		    n_javascript == javascript &&
-		    //n_css_active == css_active &&
-		    n_javascript_active == javascript_active
-            ) {
+		    n_javascript_active == javascript_active) {
 			return;
 		}
 
@@ -373,7 +369,6 @@ void BrowserSource::Update(obs_data_t *settings)
 		shutdown_on_invisible = n_shutdown;
 		restart               = n_restart;
 		css                   = n_css;
-		//css_active            = n_css_active;
 		url                   = n_url;
 		javascript            = n_javascript;
 		javascript_active     = n_javascript_active;

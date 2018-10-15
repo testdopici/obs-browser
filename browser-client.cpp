@@ -256,8 +256,8 @@ void BrowserClient::OnLoadEnd(
 	}
 
 	if (frame->IsMain()) {
-		//if (bs->css_active == true){
 		std::string base64EncodedCSS = base64_encode(bs->css);
+
 		std::string href;
 		href += "data:text/css;charset=utf-8;base64,";
 		href += base64EncodedCSS;
@@ -269,8 +269,7 @@ void BrowserClient::OnLoadEnd(
 		script += "link.setAttribute('href', '" + href + "');";
 		script += "document.getElementsByTagName('head')[0].appendChild(link);";
 		frame->ExecuteJavaScript(script, href, 0);
-		//}
-		if (bs->javascript_active){
+		if (bs->javascript_active) {
 			std::string javascript;
 			javascript = bs->javascript;
 			frame->ExecuteJavaScript(javascript, frame->GetURL(), 0);
