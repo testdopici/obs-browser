@@ -22,6 +22,7 @@
 
 #include "cef-headers.hpp"
 #include "browser-config.h"
+#include "browser-app.hpp"
 
 #include <functional>
 #include <string>
@@ -47,6 +48,7 @@ struct BrowserSource {
 	gs_texture_t          *texture                 = nullptr;
 	int                   width                    = 0;
 	int                   height                   = 0;
+	bool                  fps_custom               = false;
 	int                   fps                      = 0;
 	bool                  restart                  = false;
 	bool                  shutdown_on_invisible    = false;
@@ -69,7 +71,7 @@ struct BrowserSource {
 
 	bool CreateBrowser();
 	void DestroyBrowser(bool async = false);
-	void ExecuteOnBrowser(std::function<void()> func, bool async = false);
+	void ExecuteOnBrowser(BrowserFunc func, bool async = false);
 
 	/* ---------------------------- */
 

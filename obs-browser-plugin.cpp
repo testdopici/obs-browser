@@ -23,6 +23,7 @@
 #include <util/dstr.hpp>
 #include <obs-module.h>
 #include <obs.hpp>
+#include <functional>
 #include <thread>
 #include <mutex>
 
@@ -42,6 +43,11 @@
 #include <d3d11.h>
 #endif
 
+#ifdef USE_QT_LOOP
+#include <QApplication>
+#include <QThread>
+#endif
+
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-browser", "en-US")
 
@@ -49,6 +55,8 @@ using namespace std;
 using namespace json11;
 
 static thread manager_thread;
+static bool manager_initialized = false;
+os_event_t *cef_started_event = nullptr;
 
 static int adapterCount = 0;
 static std::wstring deviceId;
@@ -59,12 +67,28 @@ bool hwaccel = false;
 
 /* ========================================================================= */
 
+#ifdef USE_QT_LOOP
+extern MessageObject messageObject;
+#endif
+
 class BrowserTask : public CefTask {
 public:
 	std::function<void()> task;
 
 	inline BrowserTask(std::function<void()> task_) : task(task_) {}
-	virtual void Execute() override {task();}
+	virtual void Execute() override
+	{
+#ifdef USE_QT_LOOP
+		/* you have to put the tasks on the Qt event queue after this
+		 * call otherwise the CEF message pump may stop functioning
+		 * correctly, it's only supposed to take 10ms max */
+		QMetaObject::invokeMethod(&messageObject, "ExecuteTask",
+				Qt::QueuedConnection,
+				Q_ARG(MessageTask, task));
+#else
+		task();
+#endif
+	}
 
 	IMPLEMENT_REFCOUNTING(BrowserTask);
 };
@@ -86,10 +110,15 @@ overflow: hidden; \
 static void browser_source_get_defaults(obs_data_t *settings)
 {
 	obs_data_set_default_string(settings, "url",
-			"https://www.obsproject.com");
+			"https://obsproject.com/browser-source");
 	obs_data_set_default_int(settings, "width", 800);
 	obs_data_set_default_int(settings, "height", 600);
 	obs_data_set_default_int(settings, "fps", 30);
+#if EXPERIMENTAL_SHARED_TEXTURE_SUPPORT_ENABLED
+	obs_data_set_default_bool(settings, "fps_custom", false);
+#else
+	obs_data_set_default_bool(settings, "fps_custom", true);
+#endif
 	obs_data_set_default_bool(settings, "shutdown", false);
 	obs_data_set_default_bool(settings, "restart_when_active", false);
 	obs_data_set_default_string(settings, "css", default_css);
@@ -105,6 +134,16 @@ static bool is_local_file_modified(obs_properties_t *props,
 	obs_property_t *local_file = obs_properties_get(props, "local_file");
 	obs_property_set_visible(url, !enabled);
 	obs_property_set_visible(local_file, enabled);
+
+	return true;
+}
+
+static bool is_fps_custom(obs_properties_t *props,
+		obs_property_t *, obs_data_t *settings)
+{
+	bool enabled = obs_data_get_bool(settings, "fps_custom");
+	obs_property_t *fps = obs_properties_get(props, "fps");
+	obs_property_set_visible(fps, enabled);
 
 	return true;
 }
@@ -140,6 +179,15 @@ static obs_properties_t *browser_source_get_properties(void *data)
 			obs_module_text("Width"), 1, 4096, 1);
 	obs_properties_add_int(props, "height",
 			obs_module_text("Height"), 1, 4096, 1);
+
+	obs_property_t *fps_set = obs_properties_add_bool(props, "fps_custom",
+			obs_module_text("CustomFrameRate"));
+	obs_property_set_modified_callback(fps_set, is_fps_custom);
+
+#if !EXPERIMENTAL_SHARED_TEXTURE_SUPPORT_ENABLED
+	obs_property_set_enabled(fps_set, false);
+#endif
+
 	obs_properties_add_int(props, "fps",
 			obs_module_text("FPS"), 1, 60, 1);
 	obs_properties_add_text(props, "css",
@@ -163,28 +211,51 @@ static obs_properties_t *browser_source_get_properties(void *data)
 	return props;
 }
 
-static void BrowserManagerThread(void)
+static CefRefPtr<BrowserApp> app;
+
+static void BrowserInit(void)
 {
 	string path = obs_get_module_binary_path(obs_current_module());
 	path = path.substr(0, path.find_last_of('/') + 1);
 	path += "//obs-browser-page";
 #ifdef _WIN32
 	path += ".exe";
+	CefMainArgs args;
+#else
+	/* On non-windows platforms, ie macOS, we'll want to pass thru flags to CEF */
+	struct obs_cmdline_args cmdline_args = obs_get_cmdline_args();
+	CefMainArgs args(cmdline_args.argc, cmdline_args.argv);
 #endif
 
-	CefMainArgs args;
 	CefSettings settings;
-	settings.log_severity = LOGSEVERITY_VERBOSE;
+	settings.log_severity = LOGSEVERITY_DISABLE;
 	settings.windowless_rendering_enabled = true;
 	settings.no_sandbox = true;
+
+#ifdef USE_QT_LOOP
+	settings.external_message_pump = true;
+	settings.multi_threaded_message_loop = false;
+#endif
 
 #if defined(__APPLE__) && !defined(BROWSER_DEPLOY)
 	CefString(&settings.framework_dir_path) = CEF_LIBRARY;
 #endif
 
+	std::string obs_locale = obs_get_locale();
+	std::string accepted_languages;
+	if (obs_locale != "en-US") {
+		accepted_languages = obs_locale;
+		accepted_languages += ",";
+		accepted_languages += "en-US,en";
+	} else {
+		accepted_languages = "en-US,en";
+	}
+
 	BPtr<char> conf_path = obs_module_config_path("");
 	os_mkdir(conf_path);
 	BPtr<char> conf_path_abs = os_get_abs_path_ptr(conf_path);
+	CefString(&settings.locale) = obs_get_locale();
+	CefString(&settings.accept_language_list) = accepted_languages;
 	CefString(&settings.cache_path) = conf_path_abs;
 	CefString(&settings.browser_subprocess_path) = path;
 
@@ -198,20 +269,45 @@ static void BrowserManagerThread(void)
 	}
 #endif
 
-	CefRefPtr<BrowserApp> app(new BrowserApp(tex_sharing_avail));
+	app = new BrowserApp(tex_sharing_avail);
 	CefExecuteProcess(args, app, nullptr);
 	CefInitialize(args, settings, app, nullptr);
 	CefRegisterSchemeHandlerFactory("http", "absolute",
 			new BrowserSchemeHandlerFactory());
-	CefRunMessageLoop();
-	CefShutdown();
+	os_event_signal(cef_started_event);
 }
+
+#ifdef USE_QT_LOOP
+extern MessageObject messageObject;
+#endif
+
+static void BrowserShutdown(void)
+{
+#ifdef USE_QT_LOOP
+	while (messageObject.ExecuteNextBrowserTask());
+	CefDoMessageLoopWork();
+#endif
+	CefShutdown();
+	app = nullptr;
+}
+
+#ifndef USE_QT_LOOP
+static void BrowserManagerThread(void)
+{
+	BrowserInit();
+	CefRunMessageLoop();
+	BrowserShutdown();
+}
+#endif
 
 extern "C" EXPORT void obs_browser_initialize(void)
 {
-	static bool manager_initialized = false;
 	if (!os_atomic_set_bool(&manager_initialized, true)) {
+#ifdef USE_QT_LOOP
+		BrowserInit();
+#else
 		manager_thread = thread(BrowserManagerThread);
+#endif
 	}
 }
 
@@ -323,34 +419,34 @@ void RegisterBrowserSource()
 
 /* ========================================================================= */
 
-extern void DispatchJSEvent(const char *eventName, const char *jsonString);
+extern void DispatchJSEvent(std::string eventName, std::string jsonString);
 
 static void handle_obs_frontend_event(enum obs_frontend_event event, void *)
 {
 	switch (event) {
 	case OBS_FRONTEND_EVENT_STREAMING_STARTING:
-		DispatchJSEvent("obsStreamingStarting", nullptr);
+		DispatchJSEvent("obsStreamingStarting", "");
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STARTED:
-		DispatchJSEvent("obsStreamingStarted", nullptr);
+		DispatchJSEvent("obsStreamingStarted", "");
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STOPPING:
-		DispatchJSEvent("obsStreamingStopping", nullptr);
+		DispatchJSEvent("obsStreamingStopping", "");
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STOPPED:
-		DispatchJSEvent("obsStreamingStopped", nullptr);
+		DispatchJSEvent("obsStreamingStopped", "");
 		break;
 	case OBS_FRONTEND_EVENT_RECORDING_STARTING:
-		DispatchJSEvent("obsRecordingStarting", nullptr);
+		DispatchJSEvent("obsRecordingStarting", "");
 		break;
 	case OBS_FRONTEND_EVENT_RECORDING_STARTED:
-		DispatchJSEvent("obsRecordingStarted", nullptr);
+		DispatchJSEvent("obsRecordingStarted", "");
 		break;
 	case OBS_FRONTEND_EVENT_RECORDING_STOPPING:
-		DispatchJSEvent("obsRecordingStopping", nullptr);
+		DispatchJSEvent("obsRecordingStopping", "");
 		break;
 	case OBS_FRONTEND_EVENT_RECORDING_STOPPED:
-		DispatchJSEvent("obsRecordingStopped", nullptr);
+		DispatchJSEvent("obsRecordingStopped", "");
 		break;
 	case OBS_FRONTEND_EVENT_SCENE_CHANGED:
 		{
@@ -370,11 +466,11 @@ static void handle_obs_frontend_event(enum obs_frontend_event event, void *)
 				{"height", (int)obs_source_get_height(source)}
 			};
 
-			DispatchJSEvent("obsSceneChanged", json.dump().c_str());
+			DispatchJSEvent("obsSceneChanged", json.dump());
 			break;
 		}
 	case OBS_FRONTEND_EVENT_EXIT:
-		DispatchJSEvent("obsExit", nullptr);
+		DispatchJSEvent("obsExit", "");
 		break;
 	default:;
 	}
@@ -415,6 +511,8 @@ static inline void EnumAdapterCount()
 static const wchar_t *blacklisted_devices[] = {
 	L"Intel",
 	L"Microsoft",
+	L"Radeon HD 8850M",
+	L"Radeon HD 7660",
 	nullptr
 };
 #endif
@@ -423,6 +521,14 @@ bool obs_module_load(void)
 {
 	blog(LOG_INFO, "[obs-browser]: Version %s",
 			OBS_BROWSER_VERSION_STRING);
+
+#ifdef USE_QT_LOOP
+	qRegisterMetaType<MessageTask>("MessageTask");
+#endif
+
+	os_event_init(&cef_started_event, OS_EVENT_TYPE_MANUAL);
+
+	CefEnableHighDPISupport();
 
 #ifdef _WIN32
 	EnumAdapterCount();
@@ -458,10 +564,16 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
+#ifdef USE_QT_LOOP
+	BrowserShutdown();
+#else
 	if (manager_thread.joinable()) {
 		while (!QueueCEFTask([] () {CefQuitMessageLoop();}))
 			os_sleep_ms(5);
 
 		manager_thread.join();
 	}
+#endif
+
+	os_event_destroy(cef_started_event);
 }
