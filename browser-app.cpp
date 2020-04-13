@@ -43,19 +43,22 @@ CefRefPtr<CefBrowserProcessHandler> BrowserApp::GetBrowserProcessHandler()
 	return this;
 }
 
-void BrowserApp::OnRegisterCustomSchemes(
-		CefRawPtr<CefSchemeRegistrar> registrar)
+void BrowserApp::OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar)
 {
-#if CHROME_VERSION_BUILD >= 3029
+#if CHROME_VERSION_BUILD >= 3683
+	registrar->AddCustomScheme("http",
+				   CEF_SCHEME_OPTION_STANDARD |
+					   CEF_SCHEME_OPTION_CORS_ENABLED);
+#elif CHROME_VERSION_BUILD >= 3029
 	registrar->AddCustomScheme("http", true, false, false, false, true,
-			false);
+				   false);
 #else
 	registrar->AddCustomScheme("http", true, false, false, false, true);
 #endif
 }
 
 void BrowserApp::OnBeforeChildProcessLaunch(
-		CefRefPtr<CefCommandLine> command_line)
+	CefRefPtr<CefCommandLine> command_line)
 {
 #ifdef _WIN32
 	std::string pid = std::to_string(GetCurrentProcessId());
@@ -66,8 +69,7 @@ void BrowserApp::OnBeforeChildProcessLaunch(
 }
 
 void BrowserApp::OnBeforeCommandLineProcessing(
-		const CefString &,
-		CefRefPtr<CefCommandLine> command_line)
+	const CefString &, CefRefPtr<CefCommandLine> command_line)
 {
 	if (!shared_texture_available) {
 		bool enableGPU = command_line->HasSwitch("enable-gpu");
@@ -79,41 +81,71 @@ void BrowserApp::OnBeforeCommandLineProcessing(
 		}
 	}
 
-	command_line->AppendSwitch("enable-system-flash");
+	if (command_line->HasSwitch("disable-features")) {
+		// Don't override existing, as this can break OSR
+		std::string disableFeatures =
+			command_line->GetSwitchValue("disable-features");
+		disableFeatures += ",HardwareMediaKeyHandling"
+#ifdef __APPLE__
+				   ",NetworkService"
+#endif
+			;
+		command_line->AppendSwitchWithValue("disable-features",
+						    disableFeatures);
+	} else {
+		command_line->AppendSwitchWithValue("disable-features",
+						    "HardwareMediaKeyHandling"
+#ifdef __APPLE__
+						    ",NetworkService"
+#endif
+		);
+	}
 
 	command_line->AppendSwitchWithValue("autoplay-policy",
-			"no-user-gesture-required");
+					    "no-user-gesture-required");
 }
 
-void BrowserApp::OnContextCreated(CefRefPtr<CefBrowser>,
-		CefRefPtr<CefFrame>,
-		CefRefPtr<CefV8Context> context)
+void BrowserApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
+				  CefRefPtr<CefFrame>,
+				  CefRefPtr<CefV8Context> context)
 {
 	CefRefPtr<CefV8Value> globalObj = context->GetGlobal();
 
 	CefRefPtr<CefV8Value> obsStudioObj = CefV8Value::CreateObject(0, 0);
-	globalObj->SetValue("obsstudio",
-			obsStudioObj, V8_PROPERTY_ATTRIBUTE_NONE);
+	globalObj->SetValue("obsstudio", obsStudioObj,
+			    V8_PROPERTY_ATTRIBUTE_NONE);
 
 	CefRefPtr<CefV8Value> pluginVersion =
 		CefV8Value::CreateString(OBS_BROWSER_VERSION_STRING);
-	obsStudioObj->SetValue("pluginVersion",
-			pluginVersion, V8_PROPERTY_ATTRIBUTE_NONE);
+	obsStudioObj->SetValue("pluginVersion", pluginVersion,
+			       V8_PROPERTY_ATTRIBUTE_NONE);
 
-	CefRefPtr<CefV8Value> func =
+	CefRefPtr<CefV8Value> getCurrentScene =
 		CefV8Value::CreateFunction("getCurrentScene", this);
-	obsStudioObj->SetValue("getCurrentScene",
-			func, V8_PROPERTY_ATTRIBUTE_NONE);
+	obsStudioObj->SetValue("getCurrentScene", getCurrentScene,
+			       V8_PROPERTY_ATTRIBUTE_NONE);
 
 	CefRefPtr<CefV8Value> getStatus =
 		CefV8Value::CreateFunction("getStatus", this);
-	obsStudioObj->SetValue("getStatus",
-			getStatus, V8_PROPERTY_ATTRIBUTE_NONE);
+	obsStudioObj->SetValue("getStatus", getStatus,
+			       V8_PROPERTY_ATTRIBUTE_NONE);
+
+	CefRefPtr<CefV8Value> saveReplayBuffer =
+		CefV8Value::CreateFunction("saveReplayBuffer", this);
+	obsStudioObj->SetValue("saveReplayBuffer", saveReplayBuffer,
+			       V8_PROPERTY_ATTRIBUTE_NONE);
+
+#if !ENABLE_WASHIDDEN
+	int id = browser->GetIdentifier();
+	if (browserVis.find(id) != browserVis.end()) {
+		SetDocumentVisibility(browser, browserVis[id]);
+	}
+#endif
 }
 
 void BrowserApp::ExecuteJSFunction(CefRefPtr<CefBrowser> browser,
-		const char *functionName,
-		CefV8ValueList arguments)
+				   const char *functionName,
+				   CefV8ValueList arguments)
 {
 	CefRefPtr<CefV8Context> context =
 		browser->GetMainFrame()->GetV8Context();
@@ -130,9 +162,96 @@ void BrowserApp::ExecuteJSFunction(CefRefPtr<CefBrowser> browser,
 	context->Exit();
 }
 
+#if !ENABLE_WASHIDDEN
+void BrowserApp::SetFrameDocumentVisibility(CefRefPtr<CefBrowser> browser,
+					    CefRefPtr<CefFrame> frame,
+					    bool isVisible)
+{
+	CefRefPtr<CefV8Context> context = frame->GetV8Context();
+
+	context->Enter();
+
+	CefRefPtr<CefV8Value> globalObj = context->GetGlobal();
+
+	CefRefPtr<CefV8Value> documentObject = globalObj->GetValue("document");
+
+	if (!!documentObject) {
+		documentObject->SetValue("hidden",
+					 CefV8Value::CreateBool(!isVisible),
+					 V8_PROPERTY_ATTRIBUTE_READONLY);
+
+		documentObject->SetValue(
+			"visibilityState",
+			CefV8Value::CreateString(isVisible ? "visible"
+							   : "hidden"),
+			V8_PROPERTY_ATTRIBUTE_READONLY);
+
+		std::string script = "new CustomEvent('visibilitychange', {});";
+
+		CefRefPtr<CefV8Value> returnValue;
+		CefRefPtr<CefV8Exception> exception;
+
+		/* Create the CustomEvent object
+		 * We have to use eval to invoke the new operator */
+		bool success = context->Eval(script, frame->GetURL(), 0,
+					     returnValue, exception);
+
+		if (success) {
+			CefV8ValueList arguments;
+			arguments.push_back(returnValue);
+
+			CefRefPtr<CefV8Value> dispatchEvent =
+				documentObject->GetValue("dispatchEvent");
+
+			/* Dispatch visibilitychange event on the document
+			 * object */
+			dispatchEvent->ExecuteFunction(documentObject,
+						       arguments);
+		}
+	}
+
+	context->Exit();
+}
+
+void BrowserApp::SetDocumentVisibility(CefRefPtr<CefBrowser> browser,
+				       bool isVisible)
+{
+	/* This method might be called before OnContextCreated
+	 * call is made. We'll save the requested visibility
+	 * state here, and use it later in OnContextCreated to
+	 * set initial page visibility state. */
+	browserVis[browser->GetIdentifier()] = isVisible;
+
+	std::vector<int64> frameIdentifiers;
+	/* Set visibility state for every frame in the browser
+	 *
+	 * According to the Page Visibility API documentation:
+	 * https://developer.mozilla.org/en-US/docs/Web/API/Page_Visibility_API
+	 *
+	 * "Visibility states of an <iframe> are the same as
+	 * the parent document. Hiding an <iframe> using CSS
+	 * properties (such as display: none;) doesn't trigger
+	 * visibility events or change the state of the document
+	 * contained within the frame."
+	 *
+	 * Thus, we set the same visibility state for every frame of the browser.
+	 */
+	browser->GetFrameIdentifiers(frameIdentifiers);
+
+	for (int64 frameId : frameIdentifiers) {
+		CefRefPtr<CefFrame> frame = browser->GetFrame(frameId);
+
+		SetFrameDocumentVisibility(browser, frame, isVisible);
+	}
+}
+#endif
+
 bool BrowserApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-		CefProcessId source_process,
-		CefRefPtr<CefProcessMessage> message)
+#if CHROME_VERSION_BUILD >= 3770
+					  CefRefPtr<CefFrame> frame,
+#endif
+					  CefProcessId source_process,
+					  CefRefPtr<CefProcessMessage> message)
 {
 	DCHECK(source_process == PID_BROWSER);
 
@@ -143,6 +262,10 @@ bool BrowserApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 		arguments.push_back(CefV8Value::CreateBool(args->GetBool(0)));
 
 		ExecuteJSFunction(browser, "onVisibilityChange", arguments);
+
+#if !ENABLE_WASHIDDEN
+		SetDocumentVisibility(browser, args->GetBool(0));
+#endif
 
 	} else if (message->GetName() == "Active") {
 		CefV8ValueList arguments;
@@ -159,7 +282,8 @@ bool BrowserApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 		CefRefPtr<CefV8Value> globalObj = context->GetGlobal();
 
 		std::string err;
-		auto payloadJson = Json::parse(args->GetString(1).ToString(), err);
+		auto payloadJson =
+			Json::parse(args->GetString(1).ToString(), err);
 
 		Json::object wrapperJson;
 		if (args->GetSize() > 1)
@@ -178,8 +302,8 @@ bool BrowserApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 
 		/* Create the CustomEvent object
 		 * We have to use eval to invoke the new operator */
-		context->Eval(script, browser->GetMainFrame()->GetURL(),
-				0, returnValue, exception);
+		context->Eval(script, browser->GetMainFrame()->GetURL(), 0,
+			      returnValue, exception);
 
 		CefV8ValueList arguments;
 		arguments.push_back(returnValue);
@@ -210,12 +334,12 @@ bool BrowserApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 		CefRefPtr<CefV8Value> callback = callbackMap[callbackID];
 		CefV8ValueList args;
 
-		context->Eval(script, browser->GetMainFrame()->GetURL(),
-				0, retval, exception);
+		context->Eval(script, browser->GetMainFrame()->GetURL(), 0,
+			      retval, exception);
 
 		args.push_back(retval);
 
-		if(callback)
+		if (callback)
 			callback->ExecuteFunction(NULL, args);
 
 		context->Exit();
@@ -229,41 +353,25 @@ bool BrowserApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 	return true;
 }
 
-bool BrowserApp::Execute(const CefString &name,
-		CefRefPtr<CefV8Value>,
-		const CefV8ValueList &arguments,
-		CefRefPtr<CefV8Value> &,
-		CefString &)
+bool BrowserApp::Execute(const CefString &name, CefRefPtr<CefV8Value>,
+			 const CefV8ValueList &arguments,
+			 CefRefPtr<CefV8Value> &, CefString &)
 {
-	if (name == "getCurrentScene") {
+	if (name == "getCurrentScene" || name == "getStatus" ||
+	    name == "saveReplayBuffer") {
 		if (arguments.size() == 1 && arguments[0]->IsFunction()) {
 			callbackId++;
 			callbackMap[callbackId] = arguments[0];
 		}
 
 		CefRefPtr<CefProcessMessage> msg =
-			CefProcessMessage::Create("getCurrentScene");
+			CefProcessMessage::Create(name);
 		CefRefPtr<CefListValue> args = msg->GetArgumentList();
 		args->SetInt(0, callbackId);
 
 		CefRefPtr<CefBrowser> browser =
 			CefV8Context::GetCurrentContext()->GetBrowser();
-		browser->SendProcessMessage(PID_BROWSER, msg);
-
-	} else if (name == "getStatus") {
-		if (arguments.size() == 1 && arguments[0]->IsFunction()) {
-			callbackId++;
-			callbackMap[callbackId] = arguments[0];
-		}
-
-		CefRefPtr<CefProcessMessage> msg =
-			CefProcessMessage::Create("getStatus");
-		CefRefPtr<CefListValue> args = msg->GetArgumentList();
-		args->SetInt(0, callbackId);
-
-		CefRefPtr<CefBrowser> browser =
-			CefV8Context::GetCurrentContext()->GetBrowser();
-		browser->SendProcessMessage(PID_BROWSER, msg);
+		SendBrowserProcessMessage(browser, PID_BROWSER, msg);
 
 	} else {
 		/* Function does not exist. */
@@ -283,7 +391,7 @@ void QueueBrowserTask(CefRefPtr<CefBrowser> browser, BrowserFunc func)
 	messageObject.browserTasks.emplace_back(browser, func);
 
 	QMetaObject::invokeMethod(&messageObject, "ExecuteNextBrowserTask",
-			Qt::QueuedConnection);
+				  Qt::QueuedConnection);
 }
 
 bool MessageObject::ExecuteNextBrowserTask()
@@ -310,7 +418,8 @@ void MessageObject::ExecuteTask(MessageTask task)
 void MessageObject::DoCefMessageLoop(int ms)
 {
 	if (ms)
-		QTimer::singleShot((int)ms + 2, [] () {CefDoMessageLoopWork();});
+		QTimer::singleShot((int)ms + 2,
+				   []() { CefDoMessageLoopWork(); });
 	else
 		CefDoMessageLoopWork();
 }
@@ -323,8 +432,7 @@ void MessageObject::Process()
 void ProcessCef()
 {
 	QMetaObject::invokeMethod(&messageObject, "DoCefMessageLoop",
-			Qt::QueuedConnection,
-			Q_ARG(int, (int)0));
+				  Qt::QueuedConnection, Q_ARG(int, (int)0));
 }
 
 #define MAX_DELAY (1000 / 30)
@@ -337,14 +445,14 @@ void BrowserApp::OnScheduleMessagePumpWork(int64 delay_ms)
 		delay_ms = MAX_DELAY;
 
 	if (!frameTimer.isActive()) {
-		QObject::connect(&frameTimer, &QTimer::timeout,
-				&messageObject, &MessageObject::Process);
+		QObject::connect(&frameTimer, &QTimer::timeout, &messageObject,
+				 &MessageObject::Process);
 		frameTimer.setSingleShot(false);
 		frameTimer.start(33);
 	}
 
 	QMetaObject::invokeMethod(&messageObject, "DoCefMessageLoop",
-			Qt::QueuedConnection,
-			Q_ARG(int, (int)delay_ms));
+				  Qt::QueuedConnection,
+				  Q_ARG(int, (int)delay_ms));
 }
 #endif
