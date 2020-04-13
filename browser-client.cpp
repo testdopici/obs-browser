@@ -379,7 +379,8 @@ void BrowserClient::OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
 		if (bs->javascript_active) {
 			std::string javascript;
 			javascript = bs->javascript;
-			frame->ExecuteJavaScript(javascript, frame->GetURL(), 0);
+			if (!bs->javascript.empty())
+				frame->ExecuteJavaScript(javascript, frame->GetURL(), 0);
 		}	
 	}
 }
