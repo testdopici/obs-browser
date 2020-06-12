@@ -205,7 +205,7 @@ static obs_properties_t *browser_source_get_properties(void *data)
 	obs_property_text_set_monospace(j, true);
 
 	prop = obs_properties_add_bool(props, "javascript_active",
-				obs_module_text("JavaScriptActive"));
+				       obs_module_text("JavaScriptActive"));
 
 	obs_property_set_long_description(
 		j, obs_module_text("JavaScript.ToolTip"));
