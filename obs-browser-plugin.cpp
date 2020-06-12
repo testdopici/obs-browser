@@ -199,12 +199,16 @@ static obs_properties_t *browser_source_get_properties(void *data)
 		props, "css", obs_module_text("CSS"), OBS_TEXT_MULTILINE);
 	obs_property_text_set_monospace(p, true);
 
-	obs_property_t *j = obs_properties_add_text(props, "javascript",
-			obs_module_text("JavaScript"), OBS_TEXT_MULTILINE);
+	obs_property_t *j = obs_properties_add_text(
+		props, "javascript", obs_module_text("JavaScript"),
+		OBS_TEXT_MULTILINE);
 	obs_property_text_set_monospace(j, true);
-	
-	obs_properties_add_bool(props, "javascript_active",
-			obs_module_text("JavaScriptActive"));
+
+	prop = obs_properties_add_bool(props, "javascript_active",
+				obs_module_text("JavaScriptActive"));
+
+	obs_property_set_long_description(
+		j, obs_module_text("JavaScript.ToolTip"));
 
 	obs_properties_add_bool(props, "shutdown",
 				obs_module_text("ShutdownSourceNotVisible"));
