@@ -426,6 +426,8 @@ void BrowserSource::Update(obs_data_t *settings)
 		bool n_reroute;
 		std::string n_url;
 		std::string n_css;
+		std::string n_javascript;
+		bool n_javascript_active;
 
 		n_is_local = obs_data_get_bool(settings, "is_local_file");
 		n_width = (int)obs_data_get_int(settings, "width");
@@ -438,6 +440,9 @@ void BrowserSource::Update(obs_data_t *settings)
 		n_url = obs_data_get_string(settings,
 					    n_is_local ? "local_file" : "url");
 		n_reroute = obs_data_get_bool(settings, "reroute_audio");
+		
+		n_javascript_active  = obs_data_get_bool(settings, "javascript_active");
+		n_javascript = obs_data_get_string(settings, "javascript");
 
 		if (n_is_local && !n_url.empty()) {
 			n_url = CefURIEncode(n_url, false);
@@ -484,7 +489,8 @@ void BrowserSource::Update(obs_data_t *settings)
 		    n_height == height && n_fps_custom == fps_custom &&
 		    n_fps == fps && n_shutdown == shutdown_on_invisible &&
 		    n_restart == restart && n_css == css && n_url == url &&
-		    n_reroute == reroute_audio) {
+			n_reroute == reroute_audio && n_javascript == javascript &&
+		    n_javascript_active == javascript_active) {
 			return;
 		}
 
@@ -498,6 +504,8 @@ void BrowserSource::Update(obs_data_t *settings)
 		restart = n_restart;
 		css = n_css;
 		url = n_url;
+		javascript            = n_javascript;
+		javascript_active     = n_javascript_active;
 
 		obs_source_set_audio_active(source, reroute_audio);
 	}
